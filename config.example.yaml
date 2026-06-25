@@ -1,0 +1,10 @@
+excluded_labels:
+  - Long-Term
+  - Legal
+
+scan_page_size: 100
+sender_page_size: 50
+
+credentials_file: ~/.gmail-tool/credentials.json
+oauth_token_file: ~/.gmail-tool/token.json
+state_file: ~/.gmail-tool/state.json
