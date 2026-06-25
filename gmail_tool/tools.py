@@ -60,7 +60,7 @@ class GmailTools:
             )
             all_ids.extend(m["id"] for m in result.get("messages", []))
             page_token = result.get("nextPageToken")
-            logger.debug("Collected %d message IDs so far", len(all_ids))
+            logger.info("Collected %d message IDs so far...", len(all_ids))
 
             # Checkpoint after every page so a crash can resume
             state_path.write_text(json.dumps({

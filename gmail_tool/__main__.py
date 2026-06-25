@@ -40,6 +40,8 @@ def main():
         datefmt="%H:%M:%S",
         stream=sys.stderr,
     )
+    # Suppress noisy Google API client library warnings
+    logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
     try:
         tools = create_tools(args.config)
