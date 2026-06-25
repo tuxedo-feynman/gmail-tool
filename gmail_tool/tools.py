@@ -2,6 +2,7 @@ import base64
 import email.utils
 import json
 import logging
+import time
 from collections import defaultdict
 
 from .config import Config
@@ -29,10 +30,23 @@ class GmailTools:
     # Public tools
     # -------------------------------------------------------------------------
 
-    def initialize(self) -> dict:
-        all_ids = []
-        page_token = None
+    def initialize(self, reset: bool = False) -> dict:
+        state_path = self._config.state_path
         q = self._excluded_labels_query()
+
+        # Resume from checkpoint unless reset is requested
+        all_ids: list[str] = []
+        page_token: str | None = None
+        if not reset and state_path.exists():
+            existing = json.loads(state_path.read_text())
+            if existing.get("status") == "in_progress":
+                all_ids = existing.get("message_ids", [])
+                page_token = existing.get("next_page_token")
+                logger.info(
+                    "Resuming from checkpoint: %d IDs collected so far", len(all_ids)
+                )
+
+        state_path.parent.mkdir(parents=True, exist_ok=True)
 
         while True:
             kwargs: dict = {"userId": "me", "maxResults": 500}
@@ -41,18 +55,25 @@ class GmailTools:
             if page_token:
                 kwargs["pageToken"] = page_token
 
-            result = self._gmail.users().messages().list(**kwargs).execute()
+            result = _retry(
+                lambda: self._gmail.users().messages().list(**kwargs).execute()
+            )
             all_ids.extend(m["id"] for m in result.get("messages", []))
             page_token = result.get("nextPageToken")
             logger.debug("Collected %d message IDs so far", len(all_ids))
+
+            # Checkpoint after every page so a crash can resume
+            state_path.write_text(json.dumps({
+                "status": "in_progress",
+                "next_page_token": page_token,
+                "message_ids": all_ids,
+            }))
+
             if not page_token:
                 break
 
         all_ids.reverse()
-
-        state_path = self._config.state_path
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(json.dumps({"message_ids": all_ids}))
+        state_path.write_text(json.dumps({"status": "complete", "message_ids": all_ids}))
 
         logger.info("Initialized state with %d emails (oldest-first)", len(all_ids))
         return {"total_emails": len(all_ids), "state_file": str(state_path)}
@@ -276,7 +297,12 @@ class GmailTools:
             raise RuntimeError(
                 f"State file not found at {state_path}. Run initialize() first."
             )
-        return json.loads(state_path.read_text())
+        state = json.loads(state_path.read_text())
+        if state.get("status") == "in_progress":
+            raise RuntimeError(
+                "Initialization was interrupted. Run initialize() to resume."
+            )
+        return state
 
     def _excluded_labels_query(self) -> str:
         return " ".join(
@@ -360,6 +386,34 @@ class GmailTools:
 # -------------------------------------------------------------------------
 # Module-level helpers (pure functions, easier to test)
 # -------------------------------------------------------------------------
+
+
+def _retry(fn, max_attempts: int = 5, base_delay: float = 2.0):
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except OSError as e:
+            if attempt == max_attempts - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "Network error (attempt %d/%d): %s — retrying in %.0fs",
+                attempt + 1, max_attempts, e, delay,
+            )
+            time.sleep(delay)
+        except Exception as e:
+            status = getattr(getattr(e, "resp", None), "status", None)
+            if status in (429, 500, 503):
+                if attempt == max_attempts - 1:
+                    raise
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "API error %d (attempt %d/%d) — retrying in %.0fs",
+                    status, attempt + 1, max_attempts, delay,
+                )
+                time.sleep(delay)
+            else:
+                raise
 
 
 def _get_header(headers: list[dict], name: str) -> str:

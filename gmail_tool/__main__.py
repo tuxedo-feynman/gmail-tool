@@ -19,7 +19,8 @@ def main():
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("initialize", help="Collect all message IDs oldest-first into state file")
+    p_init = sub.add_parser("initialize", help="Collect all message IDs oldest-first into state file")
+    p_init.add_argument("--reset", action="store_true", help="Discard any existing checkpoint and start over")
     sub.add_parser("stats", help="Show mailbox storage and email counts")
 
     p_age = sub.add_parser("list-age", help="List emails oldest-first using state file")
@@ -47,7 +48,7 @@ def main():
         sys.exit(1)
 
     if args.command == "initialize":
-        result = tools.initialize()
+        result = tools.initialize(reset=args.reset)
         print(json.dumps(result, indent=2))
 
     elif args.command == "stats":

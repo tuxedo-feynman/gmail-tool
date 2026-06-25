@@ -1,8 +1,9 @@
 import base64
+import json
 import pytest
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, patch
 
-from gmail_tool.tools import _get_header, _parse_addresses, _extract_body, _extract_attachments
+from gmail_tool.tools import _get_header, _parse_addresses, _extract_body, _extract_attachments, _retry
 from tests.conftest import make_raw_message
 
 
@@ -123,9 +124,75 @@ def test_initialize_collects_and_reverses_ids(tools, mock_gmail, tmp_path, confi
     result = t.initialize()
 
     assert result["total_emails"] == 4
-    import json
     state = json.loads((tmp_path / "state.json").read_text())
+    assert state["status"] == "complete"
     assert state["message_ids"] == ["old2", "old1", "new2", "new1"]
+
+
+def test_initialize_writes_checkpoint_after_each_page(mock_gmail, tmp_path, config):
+    from gmail_tool.tools import GmailTools
+    config.state_file = str(tmp_path / "state.json")
+    t = GmailTools(mock_gmail, MagicMock(), config, "me@gmail.com")
+
+    checkpoints = []
+
+    original_write = (tmp_path / "state.json").__class__.write_text
+
+    mock_gmail.users.return_value.messages.return_value.list.return_value.execute.side_effect = [
+        {"messages": [{"id": "new1"}], "nextPageToken": "tok"},
+        {"messages": [{"id": "old1"}]},
+    ]
+
+    t.initialize()
+
+    # Final state must be complete
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["status"] == "complete"
+
+
+def test_initialize_resumes_from_checkpoint(mock_gmail, tmp_path, config):
+    from gmail_tool.tools import GmailTools
+    config.state_file = str(tmp_path / "state.json")
+
+    # Write an in-progress checkpoint
+    (tmp_path / "state.json").write_text(json.dumps({
+        "status": "in_progress",
+        "next_page_token": "resume_tok",
+        "message_ids": ["new1", "new2"],
+    }))
+
+    t = GmailTools(mock_gmail, MagicMock(), config, "me@gmail.com")
+    mock_gmail.users.return_value.messages.return_value.list.return_value.execute.return_value = {
+        "messages": [{"id": "old1"}]
+    }
+
+    result = t.initialize()
+
+    # Should have resumed: 2 existing + 1 new = 3 total
+    assert result["total_emails"] == 3
+    # Should have used the checkpoint page token
+    call_kwargs = mock_gmail.users.return_value.messages.return_value.list.call_args
+    assert call_kwargs.kwargs.get("pageToken") == "resume_tok"
+
+
+def test_initialize_reset_ignores_checkpoint(mock_gmail, tmp_path, config):
+    from gmail_tool.tools import GmailTools
+    config.state_file = str(tmp_path / "state.json")
+
+    (tmp_path / "state.json").write_text(json.dumps({
+        "status": "in_progress",
+        "next_page_token": "old_tok",
+        "message_ids": ["stale1"],
+    }))
+
+    t = GmailTools(mock_gmail, MagicMock(), config, "me@gmail.com")
+    mock_gmail.users.return_value.messages.return_value.list.return_value.execute.return_value = {
+        "messages": [{"id": "fresh1"}]
+    }
+
+    result = t.initialize(reset=True)
+
+    assert result["total_emails"] == 1
 
 
 def test_initialize_respects_excluded_labels(tools, mock_gmail, tmp_path, config):
@@ -145,14 +212,46 @@ def test_initialize_respects_excluded_labels(tools, mock_gmail, tmp_path, config
 
 
 # -------------------------------------------------------------------------
+# _retry helper
+# -------------------------------------------------------------------------
+
+def test_retry_succeeds_on_first_attempt():
+    fn = MagicMock(return_value="ok")
+    assert _retry(fn) == "ok"
+    assert fn.call_count == 1
+
+
+def test_retry_retries_on_oserror():
+    fn = MagicMock(side_effect=[OSError("network"), OSError("network"), "ok"])
+    with patch("gmail_tool.tools.time.sleep"):
+        result = _retry(fn, base_delay=0)
+    assert result == "ok"
+    assert fn.call_count == 3
+
+
+def test_retry_raises_after_max_attempts():
+    fn = MagicMock(side_effect=OSError("network"))
+    with patch("gmail_tool.tools.time.sleep"):
+        with pytest.raises(OSError):
+            _retry(fn, max_attempts=3, base_delay=0)
+    assert fn.call_count == 3
+
+
+def test_retry_does_not_retry_unexpected_errors():
+    fn = MagicMock(side_effect=ValueError("bad input"))
+    with pytest.raises(ValueError):
+        _retry(fn)
+    assert fn.call_count == 1
+
+
+# -------------------------------------------------------------------------
 # GmailTools: list_emails_by_age (cursor-based)
 # -------------------------------------------------------------------------
 
 def test_list_emails_by_age_first_page(tools, mock_gmail, tmp_path, config):
-    import json
     from gmail_tool.tools import GmailTools
     state_file = tmp_path / "state.json"
-    state_file.write_text(json.dumps({"message_ids": [f"id{i}" for i in range(25)]}))
+    state_file.write_text(json.dumps({"status": "complete", "message_ids": [f"id{i}" for i in range(25)]}))
     config.state_file = str(state_file)
     config.scan_page_size = 10
     t = GmailTools(mock_gmail, MagicMock(), config, "me@gmail.com")
@@ -168,10 +267,9 @@ def test_list_emails_by_age_first_page(tools, mock_gmail, tmp_path, config):
 
 
 def test_list_emails_by_age_last_page(tools, mock_gmail, tmp_path, config):
-    import json
     from gmail_tool.tools import GmailTools
     state_file = tmp_path / "state.json"
-    state_file.write_text(json.dumps({"message_ids": [f"id{i}" for i in range(25)]}))
+    state_file.write_text(json.dumps({"status": "complete", "message_ids": [f"id{i}" for i in range(25)]}))
     config.state_file = str(state_file)
     config.scan_page_size = 10
     t = GmailTools(mock_gmail, MagicMock(), config, "me@gmail.com")
@@ -192,6 +290,17 @@ def test_list_emails_by_age_requires_initialized_state(tools, tmp_path, config):
     t = GmailTools(MagicMock(), MagicMock(), config, "me@gmail.com")
 
     with pytest.raises(RuntimeError, match="initialize()"):
+        t.list_emails_by_age(cursor=0)
+
+
+def test_list_emails_by_age_raises_on_incomplete_state(tmp_path, config):
+    from gmail_tool.tools import GmailTools
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({"status": "in_progress", "next_page_token": "tok", "message_ids": []}))
+    config.state_file = str(state_file)
+    t = GmailTools(MagicMock(), MagicMock(), config, "me@gmail.com")
+
+    with pytest.raises(RuntimeError, match="interrupted"):
         t.list_emails_by_age(cursor=0)
 
 
