@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import sys
 
 from . import create_tools
@@ -12,6 +13,9 @@ def main():
     )
     parser.add_argument(
         "--config", default="config.yaml", help="Path to config file (default: config.yaml)"
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Show debug logs"
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -28,6 +32,13 @@ def main():
     p_recipient.add_argument("--page-token", default=None, help="Page token for next page")
 
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+    )
 
     try:
         tools = create_tools(args.config)
