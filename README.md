@@ -22,12 +22,14 @@ Emails labeled with any `excluded_labels` (e.g. `Long-Term`, `Legal`) are skippe
 
 ### 1. Google Cloud credentials
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create a project
-2. Enable the **Gmail API** and **Google Drive API**
-3. Create an OAuth 2.0 Client ID (Desktop app type)
+1. [Create a Google Cloud project](https://console.cloud.google.com/projectcreate)
+2. [Enable the Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com) and [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com) for your project
+3. [Create an OAuth 2.0 Client ID](https://console.cloud.google.com/apis/credentials/oauthclient) — choose **Desktop app** as the application type
 4. Download the credentials JSON and save it (default: `~/.gmail-tool/credentials.json`)
 
-The Drive API is needed to read storage quota. It only requests read-only metadata access.
+Google's [Python quickstart for the Gmail API](https://developers.google.com/gmail/api/quickstart/python) walks through steps 1–3 in detail if you haven't done this before.
+
+The Drive API is needed solely to read your storage quota. It only requests read-only metadata access — no Drive files are touched.
 
 ### 2. Install dependencies
 
@@ -87,6 +89,43 @@ while cursor is not None:
     tools.label_emails(["id3"], "Long-Term")
     cursor = page["next_cursor"]
 ```
+
+## Command-line usage
+
+For one-off experimenting, all read and inspection tools are available directly from the terminal. Output is JSON.
+
+```bash
+# First-time setup: collect all message IDs into state file
+python -m gmail_tool initialize
+
+# Check storage and email counts
+python -m gmail_tool stats
+
+# List the oldest batch of emails (cursor=0 = start)
+python -m gmail_tool list-age
+python -m gmail_tool list-age --cursor 100
+
+# List emails grouped by sender (most prolific first)
+python -m gmail_tool list-senders
+python -m gmail_tool list-senders --page-token <token>
+
+# List emails grouped by recipient/mailing list
+python -m gmail_tool list-recipients
+```
+
+Use a non-default config file with `--config`:
+
+```bash
+python -m gmail_tool --config ~/my-config.yaml stats
+```
+
+Pipe through `jq` to filter output:
+
+```bash
+python -m gmail_tool list-senders | jq '.senders[] | {address, email_count}'
+```
+
+---
 
 ## Tool reference
 
