@@ -21,7 +21,11 @@ def main():
 
     p_init = sub.add_parser("initialize", help="Collect all message IDs oldest-first into state file")
     p_init.add_argument("--reset", action="store_true", help="Discard any existing checkpoint and start over")
-    sub.add_parser("stats", help="Show mailbox storage and email counts")
+    p_stats = sub.add_parser("stats", help="Show mailbox storage and email counts")
+    p_stats.add_argument(
+        "--bytes", dest="unit", action="store_const", const="bytes", default="mb",
+        help="Show sizes in bytes instead of MB"
+    )
 
     p_age = sub.add_parser("list-age", help="List emails oldest-first using state file")
     p_age.add_argument("--cursor", type=int, default=0, help="Cursor position (default: 0)")
@@ -54,8 +58,8 @@ def main():
         print(json.dumps(result, indent=2))
 
     elif args.command == "stats":
-        result = tools.get_mailbox_stats()
-        print(json.dumps(result.model_dump(), indent=2))
+        result = tools.get_mailbox_stats(unit=args.unit)
+        print(json.dumps(result, indent=2))
 
     elif args.command == "list-age":
         result = tools.list_emails_by_age(cursor=args.cursor)

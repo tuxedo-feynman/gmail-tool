@@ -3,8 +3,66 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch
 
-from gmail_tool.tools import _get_header, _parse_addresses, _extract_body, _extract_attachments, _retry
+from gmail_tool.tools import _get_header, _parse_addresses, _extract_body, _extract_attachments, _retry, _to_unit
 from tests.conftest import make_raw_message
+
+
+# -------------------------------------------------------------------------
+# _to_unit
+# -------------------------------------------------------------------------
+
+def test_to_unit_bytes():
+    assert _to_unit(1024, "bytes") == 1024
+
+def test_to_unit_mb():
+    assert _to_unit(1024 * 1024, "mb") == 1.0
+
+def test_to_unit_gb():
+    assert _to_unit(1024 * 1024 * 1024, "gb") == 1.0
+
+def test_to_unit_invalid():
+    with pytest.raises(ValueError, match="Unknown unit"):
+        _to_unit(1024, "kb")
+
+
+# -------------------------------------------------------------------------
+# get_mailbox_stats
+# -------------------------------------------------------------------------
+
+def test_get_mailbox_stats_defaults_to_bytes(tools, mock_gmail, mock_drive):
+    mock_gmail.users.return_value.getProfile.return_value.execute.return_value = {
+        "messagesTotal": 1000
+    }
+    mock_drive.about.return_value.get.return_value.execute.return_value = {
+        "storageQuota": {"limit": "10737418240", "usage": "5368709120"}
+    }
+    mock_gmail.users.return_value.messages.return_value.list.return_value.execute.return_value = {
+        "resultSizeEstimate": 0
+    }
+
+    result = tools.get_mailbox_stats()
+
+    assert result["unit"] == "bytes"
+    assert result["quota"] == 10737418240
+    assert result["used"] == 5368709120
+
+
+def test_get_mailbox_stats_mb(tools, mock_gmail, mock_drive):
+    mock_gmail.users.return_value.getProfile.return_value.execute.return_value = {
+        "messagesTotal": 1000
+    }
+    mock_drive.about.return_value.get.return_value.execute.return_value = {
+        "storageQuota": {"limit": "10737418240", "usage": "5368709120"}
+    }
+    mock_gmail.users.return_value.messages.return_value.list.return_value.execute.return_value = {
+        "resultSizeEstimate": 0
+    }
+
+    result = tools.get_mailbox_stats(unit="mb")
+
+    assert result["unit"] == "mb"
+    assert result["quota"] == 10240.0
+    assert result["used"] == 5120.0
 
 
 # -------------------------------------------------------------------------

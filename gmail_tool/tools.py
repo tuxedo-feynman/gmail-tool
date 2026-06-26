@@ -10,7 +10,6 @@ from .models import (
     Attachment,
     Email,
     EmailListItem,
-    MailboxStats,
     RecipientGroup,
     SenderGroup,
 )
@@ -78,7 +77,7 @@ class GmailTools:
         logger.info("Initialized state with %d emails (oldest-first)", len(all_ids))
         return {"total_emails": len(all_ids), "state_file": str(state_path)}
 
-    def get_mailbox_stats(self) -> MailboxStats:
+    def get_mailbox_stats(self, unit: str = "bytes") -> dict:
         profile = self._gmail.users().getProfile(userId="me").execute()
         total_count = profile.get("messagesTotal", 0)
 
@@ -97,13 +96,14 @@ class GmailTools:
             except Exception as e:
                 logger.warning("Could not count emails for label %s: %s", label, e)
 
-        return MailboxStats(
-            quota_bytes=quota_bytes,
-            used_bytes=used_bytes,
-            total_email_count=total_count,
-            excluded_email_count=excluded_count,
-            actionable_email_count=max(0, total_count - excluded_count),
-        )
+        return {
+            "unit": unit,
+            "quota": _to_unit(quota_bytes, unit),
+            "used": _to_unit(used_bytes, unit),
+            "total_email_count": total_count,
+            "excluded_email_count": excluded_count,
+            "actionable_email_count": max(0, total_count - excluded_count),
+        }
 
     def list_emails_by_age(self, cursor: int) -> dict:
         state = self._load_state()
@@ -386,6 +386,16 @@ class GmailTools:
 # -------------------------------------------------------------------------
 # Module-level helpers (pure functions, easier to test)
 # -------------------------------------------------------------------------
+
+
+def _to_unit(value: int, unit: str) -> int | float:
+    if unit == "bytes":
+        return value
+    if unit == "mb":
+        return round(value / (1024 * 1024), 2)
+    if unit == "gb":
+        return round(value / (1024 * 1024 * 1024), 2)
+    raise ValueError(f"Unknown unit '{unit}'. Use 'bytes', 'mb', or 'gb'.")
 
 
 def _retry(fn, max_attempts: int = 5, base_delay: float = 2.0):

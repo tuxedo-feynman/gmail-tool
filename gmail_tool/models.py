@@ -54,9 +54,3 @@ class RecipientGroup(BaseModel):
     email_ids: list[str]
 
 
-class MailboxStats(BaseModel):
-    quota_bytes: int
-    used_bytes: int
-    total_email_count: int
-    excluded_email_count: int
-    actionable_email_count: int
