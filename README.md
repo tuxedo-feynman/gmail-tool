@@ -10,7 +10,7 @@ A Gmail cleanup tool designed to be used inside an agent harness. The agent call
 
 ## How it works
 
-The tool exposes eight operations against the Gmail API. An agent orchestrates calls across three phases:
+The tool exposes nine operations against the Gmail API. An agent orchestrates calls across three phases:
 
 1. **Quick wins** — `list_emails_by_sender` and `list_emails_by_recipient` reveal high-volume senders and mailing lists. The agent bulk-trashes obvious junk (old newsletters, social notifications, alumni lists) without reviewing individual emails.
 2. **Systematic sweep** — `list_emails_by_age` pages through all remaining mail (excluding protected labels). The agent reviews batches via `get_emails` and either trashes or labels each email.
@@ -111,6 +111,20 @@ python -m gmail_tool list-senders --page-token <token>
 
 # List emails grouped by recipient/mailing list
 python -m gmail_tool list-recipients
+
+# Fetch full content for one or more emails (body, attachments, etc.)
+python -m gmail_tool get-emails <message_id> [<message_id> ...]
+
+# Download an attachment to a file
+python -m gmail_tool get-attachment --message-id <id> --attachment-id <id> --output ./file.pdf
+```
+
+The `attachment_id` for a given email is found in the `attachments` array of `get-emails` output.
+
+`initialize` also accepts `--reset` to discard any existing checkpoint and start over:
+
+```bash
+python -m gmail_tool initialize --reset
 ```
 
 Use a non-default config file with `--config`:
@@ -139,17 +153,18 @@ Traverses all mail (excluding `excluded_labels`), collects message IDs oldest-fi
 
 ---
 
-### `get_mailbox_stats() → MailboxStats`
+### `get_mailbox_stats(unit="bytes") → dict`
 
-Returns current storage quota and email counts. Always fetches live from Gmail.
+Returns current storage quota and email counts. Always fetches live from Gmail. `unit` accepts `"bytes"`, `"mb"`, or `"gb"`.
 
 ```python
 {
-    "quota_bytes": int,
-    "used_bytes": int,
+    "unit": str,
+    "quota": int | float,
+    "used": int | float,
     "total_email_count": int,
-    "excluded_email_count": int,   # emails with excluded labels
-    "actionable_email_count": int  # total minus excluded
+    "excluded_email_count": int,
+    "actionable_email_count": int
 }
 ```
 
@@ -213,7 +228,22 @@ Fetches full content for a list of message IDs.
 }
 ```
 
-`Email` fields: `message_id`, `thread_id`, `sent_at`, `from_address`, `to`, `cc`, `bcc`, `subject`, `body` (plain text), `labels`, `gmail_size_bytes`, `attachments`
+`Email` fields: `message_id`, `thread_id`, `sent_at`, `from_address`, `to`, `cc`, `bcc`, `subject`, `body` (plain text; falls back to HTML-stripped if no plain text part), `labels`, `gmail_size_bytes`, `attachments`
+
+`Attachment` fields: `filename`, `mime_type`, `gmail_size_bytes`, `attachment_id`
+
+---
+
+### `get_attachment(message_id, attachment_id) → dict`
+
+Fetches the raw content of an attachment. The `attachment_id` comes from the `attachments` list returned by `get_emails`.
+
+```python
+{
+    "data": str,       # base64url-encoded bytes
+    "size_bytes": int
+}
+```
 
 ---
 
