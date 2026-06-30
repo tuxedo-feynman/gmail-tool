@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from collections import defaultdict
+from html.parser import HTMLParser
 
 from .config import Config
 from .models import (
@@ -241,6 +242,15 @@ class GmailTools:
 
         return {"emails": emails, "failed_ids": failed_ids}
 
+    def get_attachment(self, message_id: str, attachment_id: str) -> dict:
+        result = self._gmail.users().messages().attachments().get(
+            userId="me", messageId=message_id, id=attachment_id
+        ).execute()
+        data = result.get("data", "")
+        size_bytes = len(base64.urlsafe_b64decode(data)) if data else 0
+        logger.debug("Fetched attachment %s from message %s (%d bytes)", attachment_id, message_id, size_bytes)
+        return {"data": data, "size_bytes": size_bytes}
+
     def trash_emails(self, email_ids: list[str]) -> dict:
         trashed_count = 0
         failed_ids = []
@@ -444,33 +454,60 @@ def _parse_addresses(header_value: str) -> list[str]:
     return addresses
 
 
-def _extract_body(payload: dict) -> str:
-    mime_type = payload.get("mimeType", "")
-
-    if mime_type == "text/plain":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-
-    for part in payload.get("parts", []):
-        body = _extract_body(part)
-        if body:
-            return body
-
+def _decode_part_data(payload: dict) -> str:
+    data = payload.get("body", {}).get("data", "")
+    if data:
+        return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
     return ""
+
+
+def _extract_text(payload: dict, mime_type: str) -> str:
+    if payload.get("mimeType") == mime_type:
+        return _decode_part_data(payload)
+    for part in payload.get("parts", []):
+        result = _extract_text(part, mime_type)
+        if result:
+            return result
+    return ""
+
+
+def _strip_html(html: str) -> str:
+    class _Stripper(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self._parts: list[str] = []
+
+        def handle_data(self, data: str) -> None:
+            self._parts.append(data)
+
+        def get_text(self) -> str:
+            return "".join(self._parts)
+
+    stripper = _Stripper()
+    stripper.feed(html)
+    return stripper.get_text()
+
+
+def _extract_body(payload: dict) -> str:
+    return _extract_text(payload, "text/plain") or _strip_html(
+        _extract_text(payload, "text/html")
+    )
 
 
 def _extract_attachments(payload: dict) -> list[Attachment]:
     attachments = []
     for part in payload.get("parts", []):
         filename = part.get("filename", "")
-        size = part.get("body", {}).get("size", 0)
+        body = part.get("body", {})
+        size = body.get("size", 0)
+        attachment_id = body.get("attachmentId", "")
         if filename and size > 0:
             attachments.append(
                 Attachment(
                     filename=filename,
                     mime_type=part.get("mimeType", ""),
                     gmail_size_bytes=size,
+                    attachment_id=attachment_id,
                 )
             )
         attachments.extend(_extract_attachments(part))

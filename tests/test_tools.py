@@ -3,7 +3,7 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch
 
-from gmail_tool.tools import _get_header, _parse_addresses, _extract_body, _extract_attachments, _retry, _to_unit
+from gmail_tool.tools import _get_header, _parse_addresses, _extract_body, _extract_attachments, _retry, _to_unit, _strip_html, _extract_text
 from tests.conftest import make_raw_message
 
 
@@ -115,8 +115,28 @@ def test_extract_body_multipart_prefers_plain():
     assert _extract_body(payload) == "Plain text"
 
 
+def test_extract_body_falls_back_to_html():
+    html = base64.urlsafe_b64encode(b"<p>Hello <b>world</b></p>").decode()
+    payload = {
+        "mimeType": "multipart/alternative",
+        "body": {},
+        "parts": [
+            {"mimeType": "text/html", "body": {"data": html}},
+        ],
+    }
+    assert _extract_body(payload) == "Hello world"
+
+
 def test_extract_body_empty():
     assert _extract_body({"mimeType": "text/plain", "body": {}}) == ""
+
+
+def test_strip_html_removes_tags():
+    assert _strip_html("<p>Hello <b>world</b></p>") == "Hello world"
+
+
+def test_strip_html_empty():
+    assert _strip_html("") == ""
 
 
 def test_extract_attachments_finds_attachment():
@@ -124,7 +144,7 @@ def test_extract_attachments_finds_attachment():
         {
             "filename": "report.pdf",
             "mimeType": "application/pdf",
-            "body": {"size": 50000},
+            "body": {"size": 50000, "attachmentId": "att_abc123"},
             "parts": [],
         }
     ]
@@ -132,6 +152,7 @@ def test_extract_attachments_finds_attachment():
     assert len(attachments) == 1
     assert attachments[0].filename == "report.pdf"
     assert attachments[0].gmail_size_bytes == 50000
+    assert attachments[0].attachment_id == "att_abc123"
 
 
 def test_extract_attachments_ignores_zero_size():
@@ -580,3 +601,19 @@ def test_get_emails_partial_failure(tools, mock_gmail):
 
     assert len(result["emails"]) == 1
     assert result["failed_ids"] == ["bad_id"]
+
+
+# -------------------------------------------------------------------------
+# GmailTools: get_attachment
+# -------------------------------------------------------------------------
+
+def test_get_attachment_returns_data(tools, mock_gmail):
+    raw = base64.urlsafe_b64encode(b"PDF content").decode()
+    mock_gmail.users.return_value.messages.return_value.attachments.return_value.get.return_value.execute.return_value = {
+        "data": raw
+    }
+
+    result = tools.get_attachment(message_id="msg1", attachment_id="att1")
+
+    assert result["data"] == raw
+    assert result["size_bytes"] == len(b"PDF content")

@@ -5,6 +5,7 @@ class Attachment(BaseModel):
     filename: str
     mime_type: str
     gmail_size_bytes: int
+    attachment_id: str
 
 
 class EmailListItem(BaseModel):

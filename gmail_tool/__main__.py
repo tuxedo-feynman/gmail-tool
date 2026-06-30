@@ -1,7 +1,9 @@
 import argparse
+import base64
 import json
 import logging
 import sys
+from pathlib import Path
 
 from . import create_tools
 
@@ -35,6 +37,14 @@ def main():
 
     p_recipient = sub.add_parser("list-recipients", help="List emails grouped by recipient")
     p_recipient.add_argument("--page-token", default=None, help="Page token for next page")
+
+    p_get = sub.add_parser("get-emails", help="Fetch full content for one or more email IDs")
+    p_get.add_argument("ids", nargs="+", help="One or more message IDs")
+
+    p_att = sub.add_parser("get-attachment", help="Download an attachment to a file")
+    p_att.add_argument("--message-id", required=True, help="Message ID containing the attachment")
+    p_att.add_argument("--attachment-id", required=True, help="Attachment ID (from get-emails output)")
+    p_att.add_argument("--output", required=True, help="Path to save the attachment")
 
     args = parser.parse_args()
 
@@ -84,6 +94,22 @@ def main():
             "recipients": [r.model_dump() for r in result["recipients"]],
         }
         print(json.dumps(output, indent=2))
+
+    elif args.command == "get-emails":
+        result = tools.get_emails(email_ids=args.ids)
+        output = {
+            "emails": [e.model_dump() for e in result["emails"]],
+            "failed_ids": result["failed_ids"],
+        }
+        print(json.dumps(output, indent=2))
+
+    elif args.command == "get-attachment":
+        result = tools.get_attachment(
+            message_id=args.message_id, attachment_id=args.attachment_id
+        )
+        output_path = Path(args.output)
+        output_path.write_bytes(base64.urlsafe_b64decode(result["data"]))
+        print(f"Saved {result['size_bytes']} bytes to {output_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
